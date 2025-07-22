@@ -29,12 +29,12 @@ namespace infini
         auto output_dim = input_dim;
         int rank = A->getRank();
 
-        // =================================== 作业 ===================================
-        // TODO：修改 output_dim，返回正确的 transpose 后的 shape
-        // REF: https://onnx.ai/onnx/operators/onnx__Transpose.html#transpose-21
-        // =================================== 作业 ===================================
+        // Apply permutation to get output dimensions
+        for (int i = 0; i < rank; ++i) {
+            output_dim[i] = input_dim[transposePermute[i]];
+        }
 
-        return std::nullopt;
+        return {{output_dim}};
     }
 
     std::string TransposeObj::toString() const
