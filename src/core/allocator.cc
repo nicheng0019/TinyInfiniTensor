@@ -1,5 +1,6 @@
 #include "core/allocator.h"
 #include <utility>
+#include <map>
 
 namespace infini
 {
@@ -23,17 +24,60 @@ namespace infini
         }
     }
 
-    size_t Allocator::alloc(size_t size)
-    {
+    size_t Allocator::alloc(size_t size) {
         IT_ASSERT(this->ptr == nullptr);
-        // pad the size to the multiple of alignment
-        size = this->getAlignedSize(size);
+        size = getAlignedSize(size);
 
-        // =================================== 作业 ===================================
-        // TODO: 设计一个算法来分配内存，返回起始地址偏移量
-        // =================================== 作业 ===================================
+        if (!freeBlocks.empty()) {
+            auto lastBlock = freeBlocks.rbegin(); // Get the last block
+            if (lastBlock->first + lastBlock->second == peak) {
+                // This is an end block, check if we can use/extend it
+                if (lastBlock->second >= size) {
+                    // Use the end block
+                    size_t addr = lastBlock->first;
+                    size_t blockSize = lastBlock->second;
+                    freeBlocks.erase(std::prev(freeBlocks.end()));
+                    
+                    if (blockSize > size) {
+                        freeBlocks[addr + size] = blockSize - size;
+                    }
+                    
+                    used += size;
+                    return addr;
+                } else {
+                    // Extend the end block
+                    size_t addr = lastBlock->first;
+                    size_t additionalSize = size - lastBlock->second;
+                    freeBlocks.erase(std::prev(freeBlocks.end()));
+                    peak += additionalSize;
+                    used += size;
+                    return addr;
+                }
+            }
+        }
+        
+        for (auto it = freeBlocks.begin(); it != freeBlocks.end(); ++it) {
+            if (it->second >= size) {
+                size_t addr = it->first;
+                size_t blockSize = it->second;
+                
+                // Remove the free block
+                freeBlocks.erase(it);
+                
+                // If block is larger than needed, split it
+                if (blockSize > size) {
+                    freeBlocks[addr + size] = blockSize - size;
+                }
+                
+                used += size;
+                return addr;
+            }
+        }
 
-        return 0;
+        size_t addr = peak;
+        peak += size;
+        used += size;
+        return addr;
     }
 
     void Allocator::free(size_t addr, size_t size)
@@ -41,9 +85,30 @@ namespace infini
         IT_ASSERT(this->ptr == nullptr);
         size = getAlignedSize(size);
 
-        // =================================== 作业 ===================================
-        // TODO: 设计一个算法来回收内存
-        // =================================== 作业 ===================================
+        used -= size;
+        
+        // Insert the freed block
+        freeBlocks[addr] = size;
+        
+        // Merge with adjacent blocks
+        auto it = freeBlocks.find(addr);
+        
+        // Merge with next block
+        auto next = std::next(it);
+        if (next != freeBlocks.end() && addr + size == next->first) {
+            size += next->second;
+            freeBlocks.erase(next);
+            it->second = size;
+        }
+        
+        // Merge with previous block
+        if (it != freeBlocks.begin()) {
+            auto prev = std::prev(it);
+            if (prev->first + prev->second == addr) {
+                prev->second += size;
+                freeBlocks.erase(it);
+            }
+        }
     }
 
     void *Allocator::getPtr()

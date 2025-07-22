@@ -148,11 +148,32 @@ namespace infini
         // topological sorting first
         IT_ASSERT(topo_sort() == true);
 
-        // =================================== 作业 ===================================
-        // TODO：利用 allocator 给计算图分配内存
-        // HINT: 获取分配好的内存指针后，可以调用 tensor 的 setDataBlob 函数给 tensor 绑定内存
-        // =================================== 作业 ===================================
+        std::vector<size_t> offsets;
+        for (auto &tensor : tensors) {
+            // 获取tensor需要的内存大小
+            size_t tensorSize = tensor->getBytes();
+            
+            // 使用allocator分配内存，获取偏移地址
+            size_t offset = allocator.alloc(tensorSize);
+            offsets.push_back(offset);
+        }
 
+        // 为每个tensor分配内存
+        for (size_t i = 0; i < tensors.size(); i++) {
+            auto &tensor = tensors[i];
+            size_t offset = offsets[i];
+            
+            // 获取实际的内存指针
+            void *basePtr = allocator.getPtr();
+            
+            // 计算tensor的实际内存地址
+            void *tensorPtr = static_cast<char*>(basePtr) + offset;
+            
+            // 创建Blob并绑定到tensor
+            auto blob = make_ref<BlobObj>(runtime, tensorPtr);
+            tensor->setDataBlob(blob);
+        }
+        
         allocator.info();
     }
 
