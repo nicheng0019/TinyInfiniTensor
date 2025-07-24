@@ -4,6 +4,7 @@
 namespace infini {
 
 Shape infer_broadcast(const Shape &A, const Shape &B) {
+
     // Get the maximum rank
     size_t rankA = A.size();
     size_t rankB = B.size();
@@ -27,7 +28,6 @@ Shape infer_broadcast(const Shape &A, const Shape &B) {
             IT_ASSERT(false);
         }
     }
-    
     return result;
 }
 

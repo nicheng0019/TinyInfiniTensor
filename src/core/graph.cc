@@ -1,4 +1,6 @@
 #include "core/graph.h"
+#include "operators/transpose.h"
+#include "operators/matmul.h"
 #include <algorithm>
 #include <numeric>
 #include <queue>
@@ -40,17 +42,26 @@ namespace infini
     {
         std::ostringstream oss;
         oss << "Graph Tensors:\n";
-        for (const auto &tensor : tensors)
-            oss << tensor << "\n";
 
+        for (const auto &tensor : tensors)
+        {
+            oss << tensor << "\n";
+        }
+            
         oss << "Graph operators:\n";
         for (const auto &op : ops)
         {
             vector<UidBaseType> preds, succs;
             for (auto &o : op->getPredecessors())
+            {
                 preds.emplace_back(o->getGuid());
+            }
+                
             for (auto &o : op->getSuccessors())
+            {
                 succs.emplace_back(o->getGuid());
+            }
+                
             oss << "OP " << op->getGuid();
             oss << ", pred " << vecToString(preds);
             oss << ", succ " << vecToString(succs);
@@ -98,6 +109,7 @@ namespace infini
         return this->sorted = true;
     }
 
+   
     void GraphObj::optimize()
     {
         // =================================== 作业 ===================================
@@ -106,6 +118,20 @@ namespace infini
         // 1. 去除冗余的算子（例如，两个相邻的算子都是 transpose 算子，且做的是相反的操作，可以将其全部删除）
         // 2. 合并算子（例如，矩阵乘算子中含有属性transA、transB，如果其输入存在transpose，且对最后两个维度做交换，就可以将transpose融入到矩阵乘算子的属性中去）
         // =================================== 作业 ===================================
+    
+        bool optimized = true;
+        while (optimized) {
+            optimized = false;
+            
+            // 规则1: 去除冗余的transpose算子
+            optimized |= removeRedundantTranspose();
+            // 规则2: 将transpose融入matmul算子
+            optimized |= fuseTransposeIntoMatmul();
+            
+        }
+        
+        // 重新标记需要拓扑排序
+        sorted = false;
     }
 
     Tensor GraphObj::getTensor(int fuid) const
@@ -246,6 +272,228 @@ namespace infini
             s.insert(tensor->getFuid());
         }
         return true;
+    }
+
+    bool GraphObj::removeOperatorfromGraph(Operator op)
+    {
+        for (auto &o : op->getPredecessors())
+        {
+            o->removeSuccessors(op);
+        } 
+
+        for (auto &o : op->getSuccessors())
+        {
+            o->removePredecessors(op);
+        }
+        removeOperator(op);
+        return true;
+    }
+
+    bool GraphObj::removeRedundantTranspose()
+    {
+        bool changed = false;
+
+        // 使用索引遍历避免迭代器失效
+        for (size_t i = 0; i < ops.size();) {
+            auto op = ops[i];
+
+            // 检查是否为transpose算子
+            if (op->getOpType() != OpType::Transpose) {
+                ++i;
+                continue;
+            }
+
+            auto transposeOp = as<TransposeObj>(op);
+            auto output = transposeOp->getOutput();
+
+            // 检查是否只有一个后继且也是transpose
+            if (output->getTargets().size() == 1) {
+                auto nextOp = output->getTargets()[0];
+                if (nextOp->getOpType() == OpType::Transpose) {
+                    auto nextTranspose = as<TransposeObj>(nextOp);
+
+                    // 检查两个transpose是否互为逆操作
+                    auto perm1 = transposeOp->getPermute();
+                    auto perm2 = nextTranspose->getPermute();
+
+                    if (isInversePermutation(perm1, perm2)) {
+                        // 移除这两个transpose算子
+                        auto input = transposeOp->getInputs()[0];
+                        auto finalOutput = nextTranspose->getOutput();
+
+                        // 重新连接输入到最终输出
+                        reconnectTensors(input, finalOutput);
+
+                        // 从图中移除算子和中间tensor
+                   
+                        removeOperatorfromGraph(op);
+                        removeOperatorfromGraph(nextOp);
+                        removeTensor(output);
+                        removeTensor(finalOutput);
+
+                        changed = true;
+                        i = 0; // 重新开始遍历
+                        continue;
+                    }
+                }
+            }
+            ++i;
+        }
+
+        topo_sort();
+
+        return changed;
+    }
+
+    bool GraphObj::fuseTransposeIntoMatmul()
+    {
+        bool changed = false;
+
+        // 使用索引遍历避免迭代器失效
+        for (size_t i = 0; i < ops.size(); ++i) {
+            auto op = ops[i];
+            if (op->getOpType() != OpType::MatMul) {
+                continue;
+            }
+
+            auto matmulOp = as<MatmulObj>(op);
+            auto inputA = matmulOp->getInputs()[0];
+            auto inputB = matmulOp->getInputs()[1];
+
+            bool fusedA = false, fusedB = false;
+
+            // 检查输入A是否来自transpose
+            if (auto sourceA = inputA->getSource()) {
+                if (sourceA->getOpType() == OpType::Transpose) {
+                    auto transposeA = as<TransposeObj>(sourceA);
+                    if (isLastTwoDimTranspose(transposeA->getPermute(), inputA->getRank())) {
+                        // 融入transA属性
+                        auto newMatmul = make_ref<MatmulObj>(nullptr,
+                            transposeA->getInputs()[0], inputB, matmulOp->getOutput(),
+                            !matmulOp->getTransA(), matmulOp->getTransB());
+
+                        replaceOperator(matmulOp, newMatmul);
+
+                        // 只有当transpose没有其他用户时才移除
+                        if (inputA->getTargets().size() == 1) {
+                            removeOperatorfromGraph(sourceA);
+                            removeTensor(inputA);
+                        }
+
+                        fusedA = true;
+                        changed = true;
+                    }
+                }
+            }
+
+            auto sourceB = inputB->getSource();
+            // 检查输入B是否来自transpose（如果A没有被融合）
+            if (!fusedA &&  sourceB) {
+                if (sourceB->getOpType() == OpType::Transpose) {
+                    auto transposeB = as<TransposeObj>(sourceB);
+                    if (isLastTwoDimTranspose(transposeB->getPermute(), inputB->getRank())) {
+                        // 融入transB属性
+                        
+                        auto inputtransposeB = transposeB->getInputs()[0];
+                        inputtransposeB->removeTarget(transposeB);
+                        auto newMatmul = make_ref<MatmulObj>(nullptr,
+                            inputA, inputtransposeB, matmulOp->getOutput(),
+                            matmulOp->getTransA(), !matmulOp->getTransB());
+                                              
+                        inputtransposeB->addTarget(newMatmul);
+                        replaceOperator(matmulOp, newMatmul);
+                                              
+                        // 只有当transpose没有其他用户时才移除
+                        if (inputB->getTargets().size() == 1) {
+                            
+                            removeOperatorfromGraph(sourceB);
+                            removeTensor(inputB);
+                        }
+                        
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        return changed;
+    }
+
+    bool GraphObj::isInversePermutation(const vector<int>& perm1, const vector<int>& perm2)
+    {
+        if (perm1.size() != perm2.size()) return false;
+        
+        vector<int> composed(perm1.size());
+        for (size_t i = 0; i < perm1.size(); ++i) {
+            composed[i] = perm2[perm1[i]];
+        }
+        
+        // 检查是否为恒等置换
+        for (size_t i = 0; i < composed.size(); ++i) {
+            if (composed[i] != (int)i) return false;
+        }
+        return true;
+    }
+
+    bool GraphObj::isLastTwoDimTranspose(const vector<int>& perm, int rank)
+    {
+        if (rank < 2) return false;
+        
+        // 检查是否只交换最后两个维度
+        for (int i = 0; i < rank - 2; ++i) {
+            if (perm[i] != i) return false;
+        }
+        
+        return perm[rank-2] == rank-1 && perm[rank-1] == rank-2;
+    }
+
+    void GraphObj::reconnectTensors(Tensor from, Tensor to)
+    {
+        // 复制目标列表避免在迭代时修改
+        auto targets = to->getTargets();
+        for (auto target : from->getTargets())
+        {
+            from->removeTarget(target);
+        }
+        // 将from的所有目标重定向到to
+        for (auto target : targets) {
+            target->replaceInput(to, from);
+            from->addTarget(target);
+            to->removeTarget(target);
+        }
+
+    }
+
+    void GraphObj::replaceOperator(Operator oldOp, Operator newOp)
+    {
+        // 替换ops列表中的算子
+        auto it = std::find(ops.begin(), ops.end(), oldOp);
+        if (it != ops.end()) {
+            *it = newOp;
+        }
+
+        // 更新输入tensor的目标连接
+        for (auto input : oldOp->getInputs()) {
+            if (input) {
+                input->removeTarget(oldOp);
+                input->addTarget(newOp);
+                if (auto source = input->getSource()) {
+                    source->addSuccessors(newOp);
+                    newOp->addPredecessors(source);
+                }
+            }
+        }
+
+        // 更新输出tensor的source
+        for (auto output : oldOp->getOutputs()) {
+            if (output) {
+                output->setSource(newOp);
+                for (auto target : output->getTargets()) {
+                    target->addPredecessors(newOp);
+                    newOp->addSuccessors(target);
+                }
+            }
+        }
     }
 
 } // namespace infini

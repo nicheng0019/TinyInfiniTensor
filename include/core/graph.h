@@ -113,6 +113,49 @@ namespace infini
         void addOperatorAndConnect(const Operator &op);
 
         /**
+         * @brief Remove redundant transpose operators that are inverse of each other.
+         * @return true if any optimization was performed, false otherwise.
+         */
+         bool removeRedundantTranspose();
+
+         /**
+          * @brief Fuse transpose operations into matmul operators by setting transA/transB flags.
+          * @return true if any optimization was performed, false otherwise.
+          */
+         bool fuseTransposeIntoMatmul();
+ 
+         /**
+          * @brief Check if two permutation vectors are inverse of each other.
+          * @param perm1 First permutation vector
+          * @param perm2 Second permutation vector
+          * @return true if perm2 is the inverse of perm1
+          */
+         bool isInversePermutation(const std::vector<int>& perm1, const std::vector<int>& perm2);
+ 
+         /**
+          * @brief Check if a permutation represents a transpose of the last two dimensions.
+          * @param permute The permutation vector
+          * @param rank The rank of the tensor
+          * @return true if it's a last-two-dimension transpose
+          */
+         bool isLastTwoDimTranspose(const std::vector<int>& permute, int rank);
+ 
+         /**
+          * @brief Reconnect tensors by redirecting all targets from one tensor to another.
+          * @param from Source tensor
+          * @param to Target tensor
+          */
+         void reconnectTensors(Tensor from, Tensor to);
+ 
+         /**
+          * @brief Replace an operator in the graph with a new operator.
+          * @param oldOp The operator to be replaced
+          * @param newOp The new operator to replace with
+          */
+         void replaceOperator(Operator oldOp, Operator newOp);
+
+         bool removeOperatorfromGraph(Operator op);
+        /**
          * @brief If the nodes is sorted in topological order.
          */
         bool sorted;

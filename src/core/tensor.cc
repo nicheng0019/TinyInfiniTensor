@@ -15,6 +15,7 @@ namespace infini {
     {
         // Convert data pointer to string
         std::stringstream ss;
+        
         if (data != nullptr)
             ss << data->getPtr<void *>();
         else
@@ -23,13 +24,22 @@ namespace infini {
                      std::to_string(fuid) + ", shape " + vecToString(shape) +
                      ", dtype " + dtype.toString() + ", " + runtime->toString() +
                      ", " + ss.str() + "\n";
+        
         vector<UidBaseType> targetGuids;
         for (const auto &op : targets)
+        {
             targetGuids.emplace_back(op.lock()->getGuid());
+        }
+        
         if (auto o = source.lock())
+        {
             ret += ", source " + std::to_string(o->getGuid());
+        }
         else
+        {
             ret += ", source None";
+        }
+            
         ret += ", targets " + vecToString(targetGuids);
         return ret;
     }
